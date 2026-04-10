@@ -63,7 +63,7 @@
 - ตัวแปรเป้าหมาย (Response) มี Class Imbalance โดย
   - กลุ่มที่ไม่ตอบรับ (Response = 0) มีสัดส่วน 87.74% 
   - กลุ่มที่ตอบรับ (Response = 1) มีเพียง 12.26%
-- ตัวแปรในชุดข้อมูลสามารถแบ่งออกเป็น 3 ประเภทหลัก ได้แก่
+- ตัวแปรในชุดข้อมูลสามารถแบ่งออกเป็น 4 ประเภทหลัก ได้แก่
   - ตัวแปรเชิงหมวดหมู่ (Categorical Variables) Gender/Vehicle_Age/Vehicle_Damage
   - ตัวแปรแบบไบนารี (Binary Variables) Previously_Insured/Driving_License
   - ตัวแปรเชิงตัวเลข (Numerical Variables) Age/Annual_Premium/Vintage
