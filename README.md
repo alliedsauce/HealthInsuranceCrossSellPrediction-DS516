@@ -25,7 +25,6 @@
 4. เพื่อสนับสนุนการคัดเลือกตัวแปร (Feature Selection) อย่างมีเหตุผลเชิงข้อมูล
 5. เพื่อเตรียมชุดข้อมูลสำหรับการสร้างแบบจำลอง Machine Learning ประเภท Ensemble เช่น  
    - Random Forest  
-   - Gradient Boosting  
    - XGBoost  
 
 ---
@@ -212,66 +211,275 @@ boxplot พบว่าตัวแปรแต่ละตัวแสดงร
 
 ---
 
-### Pipeline
+## Step 1: เขียน Pipeline Encode → Feature Engineering → Scale → Sampling → Model
+Pipeline นี้ถูกออกแบบเพื่อป้องกันปัญหา **data leakage** และทำให้ทุกขั้นตอนที่ต้องเรียนรู้จากข้อมูล ถูก fit เฉพาะบนชุดข้อมูลฝึก (training set) เท่านั้น โดยมีลำดับขั้นตอนดังนี้
 
-### 🧮 Encoding
+### 1.1 Encoding
+แปลงตัวแปรเชิงหมวดหมู่ให้อยู่ในรูปแบบตัวเลขที่โมเดลสามารถเรียนรู้ได้ โดยใช้ One-Hot Encoding และ Ordinal Encoding
 
+### 1.2 Feature Engineering
+สร้างตัวแปรใหม่เพื่อสะท้อนพฤติกรรมและความเสี่ยงของลูกค้าได้ดีกว่าการใช้ตัวแปรดั้งเดิม
+- `Age_x_Vehicle` ใช้สะท้อนผลกระทบร่วมระหว่างอายุลูกค้าและอายุการใช้งานรถ
+- `Premium_per_Vintage` ใช้วัดความเข้มข้นของการจ่ายเบี้ยเมื่อเทียบกับระยะเวลาที่เป็นลูกค้า
+
+### 1.3 Scaling
+ปรับขนาดค่าตัวแปรเชิงตัวเลขให้อยู่ในช่วงเดียวกัน เพื่อลดอิทธิพลของค่าที่มีสเกลสูง และช่วยให้การเรียนรู้ของโมเดลมีเสถียรภาพมากขึ้น
+
+### 1.4 Sampling
+จัดการปัญหา class imbalance โดยใช้วิธีการสุ่มตัวอย่างข้อมูล เช่น RandomUnderSampler ซึ่งจะถูกดำเนินการภายใน pipeline และถูก fit เฉพาะบนชุดข้อมูลฝึก (training set) เท่านั้น เพื่อป้องกันปัญหา data leakage
+
+### 1.5 Model
+แบบจำลอง Machine Learning เช่น Random Forest ในค่าเริ่มต้น (default configuration) โดยยังไม่มีการปรับแต่ง hyperparameters ในขั้นตอนนี้
+
+
+**Code:**
 ```python
+from sklearn.preprocessing import OrdinalEncoder, OneHotEncoder
+from sklearn.compose import ColumnTransformer
 df = df.set_index('id')
-df = pd.get_dummies(df, columns=['Gender'], drop_first=True, dtype=int)
-df['Vehicle_Age'] = df['Vehicle_Age'].map({'< 1 Year': 0, '1-2 Year': 1, '> 2 Years': 2})
-df['Vehicle_Damage'] = df['Vehicle_Damage'].map({'Yes': 1, 'No': 0})
-df.head()
+X = df.drop(columns=['Response'])
+y = df['Response']
+# === Preprocessing: ColumnTransformer ===
+preprocessor = ColumnTransformer([
+    ('onehot',  OneHotEncoder(drop='first', sparse_output=False), ['Gender']),
+    ('ordinal', OrdinalEncoder(categories=[['< 1 Year', '1-2 Year', '> 2 Years']]), ['Vehicle_Age']),
+    ('binary',  OrdinalEncoder(categories=[['No', 'Yes']]), ['Vehicle_Damage']),
+    ('numeric', StandardScaler(), ['Age', 'Region_Code', 'Previously_Insured',
+                                    'Annual_Premium', 'Policy_Sales_Channel', 'Vintage']),], remainder='drop')
+# Feature Engineering
+def add_features(X):
+    import pandas as pd
+    cols = ['Gender_Male', 'Vehicle_Age', 'Vehicle_Damage',
+            'Age', 'Region_Code', 'Previously_Insured',
+            'Annual_Premium', 'Policy_Sales_Channel', 'Vintage']
+    X = pd.DataFrame(X, columns=cols)
+    X['Age_x_Vehicle'] = X['Age'] * X['Vehicle_Age']
+    X['Premium_per_Vintage'] = X['Annual_Premium'] / (X['Vintage'] + 1)
+    return X
+# === Full Pipeline ===
+def make_full_pipeline(model, sampler=None):
+    steps = [
+        ('preprocess',  preprocessor),
+        ('feature_eng', FunctionTransformer(add_features)),
+        ('scale2',      StandardScaler()),    ]
+    if sampler is not None:
+        steps.append(('sampling', sampler))
+    steps.append(('model', model))
+    return Pipeline(steps=steps)
 ```
 ---
 
-### ✂️ Train/Test Split
+## ✂️ Step 2: Train/Test Split
 
+**Code:**
 ```python
-X = df.drop(columns=['Response'])
-y = df['Response']
-
 X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42, stratify=y
-)
-print(f"Train: {X_train.shape[0]:,} | Test: {X_test.shape[0]:,}")
+    X, y, test_size=0.2, random_state=42, stratify=y)
 ```
 **Train:** 304,887
 **Test:** 76,222
 
 ---
 
-### Class imbalance handling
+## Step 3: Training Model
 
+### 3.1 Function: train_default()
+
+ใช้สำหรับฝึกโมเดลด้วย pipeline เต็มรูปแบบ โดยไม่ใช้ GridSearchCV สำหรับการทดลองโมเดล baseline
+
+**Code:**
 ```python
-# Random Undersampling
-rus = RandomUnderSampler(random_state=42)
-X_train_rus, y_train_rus = rus.fit_resample(X_train, y_train)
-print(f"Random Under: {len(X_train):,} → {len(X_train_rus):,} | {y_train_rus.value_counts().to_dict()}")
+skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
 
-# Tomek Links
-tl = TomekLinks()
-X_train_tl, y_train_tl = tl.fit_resample(X_train, y_train)
-print(f"Tomek Links:  {len(X_train):,} → {len(X_train_tl):,} | {y_train_tl.value_counts().to_dict()}")
+def train_default(model, sampler, X_tr, y_tr, X_te, y_te, name):
+    pipe = make_full_pipeline(model, sampler=sampler)
+    pipe.fit(X_tr, y_tr)
+
+    y_pred = pipe.predict(X_te)
+    y_proba = pipe.predict_proba(X_te)[:, 1]
+    report = classification_report(y_te, y_pred, output_dict=True)
+
+    r = {
+        'best_params': 'Default', 'cv_f1': '-',
+        'c0_precision': report['0']['precision'], 'c0_recall': report['0']['recall'], 'c0_f1': report['0']['f1-score'],
+        'c1_precision': report['1']['precision'], 'c1_recall': report['1']['recall'], 'c1_f1': report['1']['f1-score'],
+        'accuracy': accuracy_score(y_te, y_pred), 'roc_auc': roc_auc_score(y_te, y_proba),
+        'y_pred': y_pred, 'y_proba': y_proba, 'model': pipe, 'scaler': None,
+        'precision': precision_score(y_te, y_pred), 'recall': recall_score(y_te, y_pred), 'f1': f1_score(y_te, y_pred),
+        'pipeline': pipe,
+    }
+    print(f'{name:<35} Class1: P={r["c1_precision"]:.4f} R={r["c1_recall"]:.4f} F1={r["c1_f1"]:.4f} | AUC={r["roc_auc"]:.4f}')
+    return r
 ```
-**Random Under**
-- **Train:** 304,887 --> 37,368
-- **Test:** 76,222 --> 37,368
+---
 
-**Tomek Links**
-- **Train:** 304,887 --> 251,460
-- **Test:** 76,222 --> 37,368
+### 3.2 การเปรียบเทียบ RandomUnderSampler และ TomekLinks โดยใช้ Random Forest และ XGBoost (Default Setting)
+
+ในขั้นตอนนี้ มีวัตถุประสงค์เพื่อเปรียบเทียบประสิทธิภาพของวิธีการจัดการ class imbalance ระหว่าง **RandomUnderSampler (RUS)** และ **Tomek Links** โดยใช้โมเดล Random Forest และ XGBoost ในค่า default configuration เพื่อประเมินผลกระทบของวิธี sampling ต่อโมเดลโดยยังไม่ปรับแต่งพารามิเตอร์ใด ๆ
+
+**Code:**
+```python
+rf_default_tl  = train_default(RandomForestClassifier(random_state=42, n_jobs=-1),
+                               TomekLinks(), X_train, y_train, X_test, y_test, 'RF Default (Tomek)')
+rf_default_rus = train_default(RandomForestClassifier(random_state=42, n_jobs=-1),
+                               RandomUnderSampler(random_state=42), X_train, y_train, X_test, y_test, 'RF Default (RUS)')
+xgb_default_tl  = train_default(XGBClassifier(device='cuda', random_state=42, eval_metric='logloss'),
+                                TomekLinks(), X_train, y_train, X_test, y_test, 'XGB Default (Tomek)')
+xgb_default_rus = train_default(XGBClassifier(device='cuda', random_state=42, eval_metric='logloss'),
+                                RandomUnderSampler(random_state=42), X_train, y_train, X_test, y_test, 'XGB Default (RUS)')
+```
+### ผลการเปรียบเทียบ RandomUnderSampler และ Tomek Links (Default Model)
+
+| Model | Sampling Method | Precision (Class 1) | Recall (Class 1) | F1-score (Class 1) | AUC |
+|------|-----------------|---------------------|------------------|--------------------|-----|
+| Random Forest | Tomek Links | **0.3685** | 0.2006 | 0.2598 | 0.8350 |
+| Random Forest | Random Under Sampler | 0.2807 | **0.8818** | 0.4258 | 0.8387 |
+| XGBoost (GPU) | Tomek Links | **0.4388** | 0.0956 | 0.1570 | 0.8555 |
+| XGBoost (GPU) | Random Under Sampler | 0.2841 | **0.9149** | 0.4336 | 0.8500 |
+
+### สรุปผลการเปรียบเทียบ
+
+จากผลการทดลองพบว่า RandomUnderSampler ให้ค่า Recall ของคลาสเป้าหมายสูงมาก ทั้งใน Random Forest (0.8818) และ XGBoost (0.9149) แต่แลกมาด้วย Precision ที่ลดลงอย่างชัดเจน
+ในขณะที่ Tomek Links ให้ Precision สูงกว่า แต่ไม่สามารถจับกลุ่มลูกค้าที่สนใจได้ดี เมื่อใช้ค่า default ของโมเดล
 
 ---
 
+### 3.3 การปรับแต่งพารามิเตอร์ของ Random Forest ร่วมกับวิธี Sampling
 
+จากผลการทดลองในขั้นตอนก่อนหน้า พบว่าการใช้วิธี Sampling แบบต่าง ๆ (RandomUnderSampler และ Tomek Links) กับโมเดลค่าเริ่มต้น (Default) ยังไม่สามารถสรุปได้อย่างชัดเจนว่าวิธีใดให้ผลลัพธ์ที่เหมาะสมที่สุด
+เนื่องจากแต่ละวิธีมี trade-off ระหว่าง Precision และ Recall ที่แตกต่างกัน ดังนั้น ในขั้นตอนนี้จึงได้ทำการปรับแต่งพารามิเตอร์ (Hyperparameter Tuning) ของโมเดล Random Forest ควบคู่ไปกับการเลือกวิธี Sampling
+เพื่อประเมินว่าการปรับความซับซ้อนของโมเดล สามารถช่วยดึงศักยภาพของวิธี Sampling แต่ละแบบออกมาได้มากขึ้นหรือไม่
 
+### ผลการปรับแต่ง Random Forest ร่วมกับวิธี Sampling
 
+| Sampling Method | Config | n_estimators | max_depth | class_weight | Precision (C1) | Recall (C1) | F1-score (C1) | AUC |
+|----------------|--------|--------------|-----------|--------------|----------------|--------------|----------------|-----|
+| Tomek Links | 1 | 100 | 10 | None | 0.2535 | 0.0883 | 0.1306 | 0.8151 |
+| Tomek Links | 2 | 200 | 30 | balanced | 0.3160 | 0.7546 | 0.4457 | 0.8480 |
+| 🏆 **Tomek Links (Best)** | **3** | **300** | **20** | **balanced** | **0.3161** | **0.7566** | **⭐ 0.4459** | **0.8483** |
+| Tomek Links | 4 | 300 | 25 | balanced | 0.3645 | 0.1739 | 0.2355 | 0.8362 |
+| Random Under Sampler | 1 | 100 | 10 | None | 0.2759 | 0.9376 | 0.4264 | 0.8560 |
+| Random Under Sampler | 2 | 200 | 30 | balanced | 0.2780 | 0.9138 | 0.4263 | 0.8491 |
+| ✅ **RUS (Best)** | **3** | **300** | **20** | **balanced** | **0.2784** | **0.9140** | **0.4268** | **0.8490** |
+| Random Under Sampler | 4 | 300 | 25 | balanced | 0.2797 | 0.8862 | 0.4252 | 0.8397 |
 
+### สรุปผลการเปรียบเทียบ
+จากการปรับแต่งพารามิเตอร์ของ Random Forest พบว่า Tomek Links ให้ค่า F1-score ของคลาสเป้าหมายสูงที่สุด (0.4459) ขณะที่ RandomUnderSampler ให้ Recall สูงกว่าแต่มี Precision ต่ำกว่า
+ผลลัพธ์ดังกล่าวแสดงให้เห็นว่า Tomek Links มีความเหมาะสมมากกว่า เมื่อพิจารณาสมดุลระหว่าง Precision และ Recall จึงถูกเลือกเป็นวิธี Sampling หลักสำหรับขั้นตอนถัดไป
 
+---
 
+### 3.4 การปรับแต่งพารามิเตอร์ของ XGBoost ร่วมกับวิธี Sampling
+การทดลองในขั้นตอนนี้ใช้ GridSearchCV เพื่อค้นหาค่าพารามิเตอร์ที่เหมาะสมของ XGBoost โดยทำการทดสอบร่วมกับวิธี Sampling (RandomUnderSampler และ Tomek Links) ในลักษณะของการทดลองแยกกันในแต่ละกรณี เพื่อประเมินผลกระทบของวิธี Sampling ต่อประสิทธิภาพของโมเดล
 
+**Code:**
+```python
+xgb_param = {
+    'n_estimators': [100, 200, 300],
+    'max_depth': [3, 6, 10],
+    'learning_rate': [0.01, 0.1, 0.3],
+    'scale_pos_weight': [1, 7],
+}
+total = np.prod([len(v) for v in xgb_param.values()])
+print(f'XGB: {total} combos × 5 folds = {total*5} fits (GPU)')
 
+def xgb_grid_gpu(X_tr, y_tr, params, sampler, name):
+    grid = GridSearchCV(
+        XGBClassifier(device='cuda', random_state=42, eval_metric='logloss'),
+        params, cv=skf, scoring='f1', n_jobs=1, refit=True
+    )
+    grid.fit(X_tr, y_tr)
+
+    y_pred  = grid.predict(X_test_pre)
+    y_proba = grid.predict_proba(X_test_pre)[:, 1]
+    report  = classification_report(y_test, y_pred, output_dict=True)
+    bp = grid.best_params_
+
+    full_pipe = make_full_pipeline(
+        XGBClassifier(**bp, device='cuda', random_state=42, eval_metric='logloss'),
+        sampler=sampler
+    )
+    full_pipe.fit(X_train, y_train)
+
+    r = {
+        'best_params': bp, 'cv_f1': f'{grid.best_score_:.4f}',
+        'c0_precision': report['0']['precision'], 'c0_recall': report['0']['recall'], 'c0_f1': report['0']['f1-score'],
+        'c1_precision': report['1']['precision'], 'c1_recall': report['1']['recall'], 'c1_f1': report['1']['f1-score'],
+        'accuracy': accuracy_score(y_test, y_pred), 'roc_auc': roc_auc_score(y_test, y_proba),
+        'y_pred': y_pred, 'y_proba': y_proba, 'model': full_pipe, 'scaler': None,
+        'precision': precision_score(y_test, y_pred), 'recall': recall_score(y_test, y_pred), 'f1': f1_score(y_test, y_pred),
+        'pipeline': full_pipe,
+    }
+    print(f'{name:<35} CV F1={grid.best_score_:.4f} | C1: P={r["c1_precision"]:.4f} R={r["c1_recall"]:.4f} F1={r["c1_f1"]:.4f} | AUC={r["roc_auc"]:.4f}')
+    print(f'{"":35} Params: {bp}')
+    return r
+
+print('\n=== Tomek Links ===')
+xgb_tuned_tl = xgb_grid_gpu(X_tl, y_tl, xgb_param, TomekLinks(), 'XGB Tuned (Tomek)')
+
+print('\n=== RUS ===')
+xgb_tuned_rus = xgb_grid_gpu(X_rus, y_rus, xgb_param, RandomUnderSampler(random_state=42), 'XGB Tuned (RUS)')
+```
+
+### ผลการปรับแต่ง XGBoost ร่วมกับวิธี Sampling
+
+| Sampling Method | CV F1-score | Precision (Class 1) | Recall (Class 1) | F1-score (Class 1) | AUC | Best Parameters |
+|-----------------|------------|----------------------|------------------|--------------------|-----|----------------|
+| 🏆 **Tomek Links (Best)** | **0.4847** | 0.3007 | 0.8375 | **0.4425** | 0.8496 | learning_rate=0.1, max_depth=10, n_estimators=300, scale_pos_weight=7 |
+| Random Under Sampler | 0.8216 | 0.2665 | **0.9554** | 0.4167 | 0.8470 | learning_rate=0.01, max_depth=3, n_estimators=300, scale_pos_weight=1 |
+
+### สรุปผลการเปรียบเทียบ
+
+จากผลการปรับแต่งพารามิเตอร์ของ XGBoost พบว่า การใช้ Tomek Links ให้ผลลัพธ์ที่สมดุลระหว่าง Precision และ Recall มากกว่า โดยมีค่า F1-score ของคลาสเป้าหมายสูงที่สุด (0.4425)
+แม้ว่า RandomUnderSampler จะให้ค่า Recall สูงกว่าอย่างชัดเจน แต่แลกมาด้วย Precision ที่ลดลง ส่งผลให้ F1-score โดยรวมต่ำกว่า 
+
+ผลลัพธ์นี้สะท้อนว่า Tomek Links สามารถลด noise ของข้อมูลและช่วยให้ XGBoost เรียนรู้ decision boundary ได้มีประสิทธิภาพมากกว่า จึงถูกเลือกเป็นวิธี Sampling ที่เหมาะสมสำหรับ XGBoost ในขั้นตอนการคัดเลือกโมเดลสุดท้าย
+
+---
+
+## Step 4: Model Evaluation
+
+ในขั้นตอนนี้ ได้ทำการประเมินประสิทธิภาพของโมเดลทั้งหมดที่ได้จากการทดลองก่อนหน้า โดยพิจารณาจากตัวชี้วัดหลายมิติ ได้แก่ Confusion Matrix, ROC Curve และค่า AUC รวมถึง metric ของคลาสเป้าหมาย
+เพื่อวิเคราะห์ trade-off ระหว่าง Precision และ Recall ก่อนนำไปสู่การตัดสินใจเลือกโมเดลสุดท้าย
+
+### 4.1 ตารางเปรียบเทียบโมเดล
+
+| Model | Sampling | CV F1 | C1 Precision | C1 Recall | **C1 F1** | AUC |
+|------|----------|-------|--------------|-----------|-----------|-----|
+| 🏆 **RF Tuned** | **Tomek Links** | – | **0.3161** | **0.7566** | ⭐ **0.4459** ⭐ | 0.8483 |
+| XGB Tuned | Tomek Links | 0.4847 | 0.3007 | 0.8375 | 0.4425 | **0.8496** |
+| XGB Default | Random Under | – | 0.2841 | 0.9149 | 0.4336 | **0.8500** |
+| RF Tuned | Random Under | – | 0.2784 | 0.9140 | 0.4268 | 0.8493 |
+| RF Default | Random Under | – | 0.2807 | 0.8818 | 0.4258 | 0.8387 |
+| XGB Tuned | Random Under | 0.8216 | 0.2665 | **0.9554** | 0.4167 | 0.8470 |
+| RF Default | Tomek Links | – | 0.3685 | 0.2006 | 0.2598 | 0.8350 |
+| XGB Default | Tomek Links | – | **0.4388** | 0.0956 | 0.1570 | **0.8555** |
+
+### 4.2 Confusion Matrix
+
+![Confusion Matrix](Material/CM.png)
+
+### 4.3 ROC Curve
+
+![ROC](Material/ROC.png)
+
+จากการประเมินด้วยกราฟ ROC พบว่าโมเดลที่ผ่านการปรับแต่งพารามิเตอร์ ทั้ง Random Forest และ XGBoost ให้ค่า AUC อยู่ในระดับใกล้เคียงกัน แสดงให้เห็นถึงความสามารถในการแยกคลาสโดยรวมที่ดี
+อย่างไรก็ตาม การวิเคราะห์ Confusion Matrix แสดงให้เห็นความแตกต่างเชิงพฤติกรรมของโมเดล โดยโมเดลที่ใช้ Tomek Links ให้ความสมดุลระหว่าง Precision และ Recall ของคลาสเป้าหมายมากกว่า ขณะที่ Random Under Sampling แม้จะให้ Recall สูง
+แต่มีแนวโน้มสร้าง false positive ในสัดส่วนที่มากกว่า
+
+---
+
+## Step 5: Model Selection
+
+จากผลการประเมินประสิทธิภาพของโมเดลทั้งหมดในขั้นตอนก่อนหน้า ซึ่งพิจารณาจากตารางเปรียบเทียบ metric, Confusion Matrix และกราฟ ROC พบว่าประสิทธิภาพของแต่ละโมเดลมี trade-off ที่แตกต่างกัน
+โดยเฉพาะระหว่าง Precision และ Recall ของคลาสเป้าหมาย (Response = 1)
+
+เมื่อพิจารณาโดยใช้ค่า **F1-score ของคลาสเป้าหมาย** เป็นเกณฑ์หลัก ควบคู่กับความสมดุลระหว่าง Precision และ Recall **Random Forest ที่ผ่านการปรับแต่งพารามิเตอร์ร่วมกับ Tomek Links**
+ให้ผลลัพธ์ที่เหมาะสมที่สุด โดยมีค่า F1-score สูงที่สุดในบรรดาโมเดลทั้งหมด พร้อมกับค่า AUC ที่อยู่ในระดับสูงและมีเสถียรภาพ
+
+ดังนั้น งานศึกษานี้จึงเลือก **Random Forest (Tuned) + Tomek Links** เป็นแบบจำลองสุดท้าย (Final Model) สำหรับการนำไปใช้งานและอภิปรายผลในขั้นตอนถัดไป
+
+---
 
 
 
