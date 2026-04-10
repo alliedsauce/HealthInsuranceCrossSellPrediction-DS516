@@ -1,14 +1,14 @@
-# Health Insurance Cross Sell Prediction
+# 💖 Health Insurance Cross Sell Prediction
 
 
-## ภาพรวมโครงการ (Project Overview)
+## 🗺️ ภาพรวมโครงการ (Project Overview)
 โครงการนี้มีวัตถุประสงค์เพื่อดำเนินการวิเคราะห์ข้อมูลเชิงสำรวจ (Exploratory Data Analysis: EDA) บนชุดข้อมูลลูกค้าประกันภัย เพื่อทำความเข้าใจลักษณะการกระจายของข้อมูล ความสัมพันธ์ระหว่างตัวแปร และปัจจัยที่ส่งผลต่อการตอบสนองของลูกค้า (Response)
 โดยผลลัพธ์จากการทำ EDA จะถูกนำไปใช้ในการคัดเลือกตัวแปร (Feature Selection) และออกแบบตัวแปรใหม่ (Feature Engineering) เพื่อเตรียมความพร้อมสำหรับการพัฒนาแบบจำลองการเรียนรู้ของเครื่องประเภท Ensemble ซึ่งมุ่งเน้นการเพิ่มประสิทธิภาพ
 ในการพยากรณ์และลดความเอนเอียงของโมเดล
 
 ---
 
-## นิยามปัญหา (Problem Statement)
+## ❓ นิยามปัญหา (Problem Statement)
 แม้ว่าชุดข้อมูลจะมีตัวแปรที่หลากหลายซึ่งครอบคลุมลักษณะของลูกค้าและยานพาหนะ แต่ยังขาดความเข้าใจอย่างเป็นระบบเกี่ยวกับความสัมพันธ์ระหว่างตัวแปรอิสระกับตัวแปรเป้าหมาย (`Response`)
 ปัญหาที่พบในข้อมูลชุดนี้ ได้แก่:
 - ตัวแปรเป้าหมายมีลักษณะไม่สมดุล (Class Imbalance)
@@ -18,7 +18,7 @@
 
 ---
 
-## วัตถุประสงค์ของโครงการ (Objectives)
+## 🎯 วัตถุประสงค์ของโครงการ (Objectives)
 1. เพื่อสำรวจโครงสร้างและลักษณะการกระจายของข้อมูลในแต่ละตัวแปร
 2. เพื่อวิเคราะห์ความสัมพันธ์ระหว่างตัวแปรอิสระกับตัวแปรเป้าหมาย (Response)
 3. เพื่อค้นหาตัวแปรที่มีความสำคัญต่อการพยากรณ์
@@ -29,7 +29,7 @@
 
 ---
 
-## รายละเอียดชุดข้อมูล (Dataset Description)
+## 🗃️ รายละเอียดชุดข้อมูล (Dataset Description)
 - ชุดข้อมูลเป็นข้อมูลระดับลูกค้า โดย 1 แถวแทนลูกค้า 1 ราย และแต่ละคอลัมน์แทนคุณลักษณะของลูกค้า
 - จำนวนข้อมูล: 381,109 แถว
 - จำนวนตัวแปร: 12 ตัวแปร
@@ -37,7 +37,7 @@
 
 ---
 
-## Data Dictionary
+## 🔢 Data Dictionary
 | ชื่อตัวแปร | ประเภทข้อมูล | คำอธิบาย |
 |----------|------------|----------|
 | `id` | Integer | รหัสประจำตัวลูกค้า (Unique ID) |
@@ -55,7 +55,7 @@
 
 ---
 
-## เครื่องมือและไลบรารี (Tools & Libraries)
+## 🔧 เครื่องมือและไลบรารี (Tools & Libraries)
 - **Python**: ภาษาหลักสำหรับการวิเคราะห์ข้อมูลและการสร้างโมเดล
 - **Pandas / NumPy**: การจัดการและประมวลผลข้อมูล
 - **Matplotlib / Seaborn**: การสร้างกราฟและการแสดงผลข้อมูล
@@ -64,7 +64,7 @@
 
 ---
 
-## Exploratory Data Analysis (EDA)
+## 🔍 Exploratory Data Analysis (EDA)
 - ชุดข้อมูลที่ใช้ในการวิเคราะห์ประกอบด้วยข้อมูลลูกค้า 381,109 ราย โดยมีตัวแปรทั้งหมด 12 ตัวแปร 
 - ข้อมูลทั้งหมดไม่มีค่า missing values 
 - ตัวแปรเป้าหมาย (Response) มี Class Imbalance โดย
@@ -122,8 +122,6 @@ boxplot พบว่าตัวแปรแต่ละตัวแสดงร
 
 ![EDA-Categorical](Material/EDA-Numerical.png)
 
-### กลุ่มที่ 3: Numerical Variables vs Response
-
 **Age**
 - กลุ่มลูกค้าที่สนใจซื้อมีค่าอายุมัธยฐานสูงกว่ากลุ่มไม่สนใจเล็กน้อย
 - แสดงแนวโน้มว่าลูกค้าวัยกลางมีความสนใจมากกว่าวัยต่ำมาก
@@ -144,8 +142,6 @@ boxplot พบว่าตัวแปรแต่ละตัวแสดงร
 การแสดงผลในลักษณะนี้มีวัตถุประสงค์เพื่อให้เห็นภาพรวมของความแตกต่างเชิงรูปแบบ (pattern) มากกว่าการตีความเชิงลำดับหรือเชิงสาเหตุ
 
 ![EDA-Categorical](Material/EDA-others.png)
-
-### กลุ่มที่ 4: Categorical (Encoded) Variables vs Response
 
 **Region_Code**
 - พบความแตกต่างของอัตราการตอบรับระหว่างบาง Region
@@ -198,7 +194,7 @@ boxplot พบว่าตัวแปรแต่ละตัวแสดงร
 
 --- 
 
-## Modeling Methodology
+## ⚖️ Modeling Methodology
 ### 🖥️ Model Type
  - **Supervised Learning:** ประเภท Binary Classification
  - **Target Label:** กลุ่มที่ไม่ตอบรับ (0) และ กลุ่มที่ตอบรับ (Response = 1)
@@ -211,7 +207,7 @@ boxplot พบว่าตัวแปรแต่ละตัวแสดงร
 
 ---
 
-## Step 1: เขียน Pipeline Encode → Feature Engineering → Scale → Sampling → Model
+## 🔀 Step 1: เขียน Pipeline Encode → Feature Engineering → Scale → Sampling → Model
 Pipeline นี้ถูกออกแบบเพื่อป้องกันปัญหา **data leakage** และทำให้ทุกขั้นตอนที่ต้องเรียนรู้จากข้อมูล ถูก fit เฉพาะบนชุดข้อมูลฝึก (training set) เท่านั้น โดยมีลำดับขั้นตอนดังนี้
 
 ### 1.1 Encoding
@@ -281,7 +277,7 @@ X_train, X_test, y_train, y_test = train_test_split(
 
 ---
 
-## Step 3: Training Model
+## 🤖 Step 3: Training Model
 
 ### 3.1 Function: train_default()
 
@@ -437,7 +433,7 @@ xgb_tuned_rus = xgb_grid_gpu(X_rus, y_rus, xgb_param, RandomUnderSampler(random_
 
 ---
 
-## Step 4: Model Evaluation
+## 📊 Step 4: Model Evaluation
 
 ในขั้นตอนนี้ ได้ทำการประเมินประสิทธิภาพของโมเดลทั้งหมดที่ได้จากการทดลองก่อนหน้า โดยพิจารณาจากตัวชี้วัดหลายมิติ ได้แก่ Confusion Matrix, ROC Curve และค่า AUC รวมถึง metric ของคลาสเป้าหมาย
 เพื่อวิเคราะห์ trade-off ระหว่าง Precision และ Recall ก่อนนำไปสู่การตัดสินใจเลือกโมเดลสุดท้าย
@@ -469,7 +465,7 @@ xgb_tuned_rus = xgb_grid_gpu(X_rus, y_rus, xgb_param, RandomUnderSampler(random_
 
 ---
 
-## Step 5: Deep Tuning
+## 🎛️ Step 5: Deep Tuning
 
 จากขั้นตอนการประเมินโมเดลก่อนหน้าจะพบว่า โมเดลบางชุดเริ่มแสดงศักยภาพที่เหนือกว่าโมเดลอื่น แต่ยังไม่สามารถสรุปผลการเลือกแบบจำลองสุดท้ายได้อย่างชัดเจน เนื่องจากค่า performance ของหลายโมเดลยังอยู่ในช่วงใกล้เคียงกัน
 ดังนั้น ในขั้นตอนนี้จึงได้ดำเนินการปรับแต่งพารามิเตอร์เชิงลึก (Deep Tuning) กับโมเดลที่มีศักยภาพสูง โดยมุ่งเน้นการปรับความซับซ้อนของโมเดล และพิจารณา trade-off ระหว่าง Precision และ Recall ของคลาสเป้าหมายอย่างละเอียด
@@ -624,7 +620,7 @@ xgb_deep_pipe.fit(X_train, y_train)
 
 ---
 
-## Step 6: Final Model Selection and Conclusion
+## ✅ Step 6: Final Model Selection and Conclusion
 
 จากผลการทดลองในขั้นตอน Deep Tuning ซึ่งรวมถึงการปรับแต่งพารามิเตอร์เชิงลึกของ Random Forest และ XGBoost รวมถึงการใช้ RandomizedSearchCV พร้อมพารามิเตอร์เพิ่มเติม
 พบว่า **XGBoost (Deep Tuned)** ให้ผลการทำนายที่ดีที่สุดโดยรวม เมื่อพิจารณาจากค่า **F1-score ของคลาสเป้าหมาย (Response = 1)** เป็นหลัก
@@ -637,7 +633,7 @@ xgb_deep_pipe.fit(X_train, y_train)
 
 ---
 
-## Step 7: Model Demonstration (Prediction Demo)
+## 🔮 Step 7: Model Demonstration (Prediction Demo)
 
 ในขั้นตอนนี้ ได้ทำการสาธิตการใช้งานโมเดลที่ผ่านการคัดเลือก โดยการสร้างข้อมูลตัวอย่างของลูกค้า และนำเข้าสู่โมเดลเพื่อทำนายความน่าจะเป็นในการสนใจซื้อประกันรถ
 
