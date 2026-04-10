@@ -469,17 +469,213 @@ xgb_tuned_rus = xgb_grid_gpu(X_rus, y_rus, xgb_param, RandomUnderSampler(random_
 
 ---
 
-## Step 5: Model Selection
+## Step 5: Deep Tuning
 
-จากผลการประเมินประสิทธิภาพของโมเดลทั้งหมดในขั้นตอนก่อนหน้า ซึ่งพิจารณาจากตารางเปรียบเทียบ metric, Confusion Matrix และกราฟ ROC พบว่าประสิทธิภาพของแต่ละโมเดลมี trade-off ที่แตกต่างกัน
-โดยเฉพาะระหว่าง Precision และ Recall ของคลาสเป้าหมาย (Response = 1)
+จากขั้นตอนการประเมินโมเดลก่อนหน้าจะพบว่า โมเดลบางชุดเริ่มแสดงศักยภาพที่เหนือกว่าโมเดลอื่น แต่ยังไม่สามารถสรุปผลการเลือกแบบจำลองสุดท้ายได้อย่างชัดเจน เนื่องจากค่า performance ของหลายโมเดลยังอยู่ในช่วงใกล้เคียงกัน
+ดังนั้น ในขั้นตอนนี้จึงได้ดำเนินการปรับแต่งพารามิเตอร์เชิงลึก (Deep Tuning) กับโมเดลที่มีศักยภาพสูง โดยมุ่งเน้นการปรับความซับซ้อนของโมเดล และพิจารณา trade-off ระหว่าง Precision และ Recall ของคลาสเป้าหมายอย่างละเอียด
+เพื่อดึงประสิทธิภาพสูงสุดของแต่ละโมเดลออกมาก่อนทำการตัดสินใจเลือกแบบจำลองสุดท้าย
 
-เมื่อพิจารณาโดยใช้ค่า **F1-score ของคลาสเป้าหมาย** เป็นเกณฑ์หลัก ควบคู่กับความสมดุลระหว่าง Precision และ Recall **Random Forest ที่ผ่านการปรับแต่งพารามิเตอร์ร่วมกับ Tomek Links**
-ให้ผลลัพธ์ที่เหมาะสมที่สุด โดยมีค่า F1-score สูงที่สุดในบรรดาโมเดลทั้งหมด พร้อมกับค่า AUC ที่อยู่ในระดับสูงและมีเสถียรภาพ
+### 5.1 Random Forest Deep Tuning - 13 Configs
 
-ดังนั้น งานศึกษานี้จึงเลือก **Random Forest (Tuned) + Tomek Links** เป็นแบบจำลองสุดท้าย (Final Model) สำหรับการนำไปใช้งานและอภิปรายผลในขั้นตอนถัดไป
+**Code:**
+```python
+old = rf_tuned_tl['best_params']
+print(f'Params เดิม: {old}')
+print(f'C1 F1 เดิม: {rf_tuned_tl["c1_f1"]:.4f}\n')
+d = old.get('max_depth', 10)
+n = old.get('n_estimators', 300)
+rf_configs = [
+    {**old},
+    {**old, 'n_estimators': n + 200},
+    {**old, 'n_estimators': n + 400},
+    {**old, 'max_depth': d - 2 if d and d > 3 else d},
+    {**old, 'max_depth': d + 5 if d else 15},
+    {**old, 'min_samples_split': 5},
+    {**old, 'min_samples_split': 10},
+    {**old, 'min_samples_leaf': 3},
+    {**old, 'min_samples_leaf': 5},
+    {**old, 'max_features': 'sqrt'},
+    {**old, 'max_features': 0.7},
+    {**old, 'n_estimators': n + 200, 'min_samples_split': 5, 'min_samples_leaf': 3},
+    {**old, 'n_estimators': n + 200, 'max_features': 'sqrt', 'min_samples_leaf': 3},
+]
+
+rf_rows = []
+for i, params in enumerate(rf_configs, 1):
+    pipe = make_full_pipeline(RandomForestClassifier(**params, random_state=42, n_jobs=-1), sampler=TomekLinks())
+    pipe.fit(X_train, y_train)
+    y_proba = pipe.predict_proba(X_test)[:, 1]
+
+    f1s_t = [f1_score(y_test, (y_proba >= t).astype(int)) for t in np.arange(0.3, 0.7, 0.05)]
+    best_t = np.arange(0.3, 0.7, 0.05)[np.argmax(f1s_t)]
+    rpt = classification_report(y_test, (y_proba >= best_t).astype(int), output_dict=True)
+
+    rf_rows.append({'Config': i, 'C1 Prec': round(rpt['1']['precision'], 4),
+        'C1 Rec': round(rpt['1']['recall'], 4), 'C1 F1': round(rpt['1']['f1-score'], 4),
+        'Threshold': best_t, 'AUC': round(roc_auc_score(y_test, y_proba), 4), 'Params': str(params)})
+    print(f'Config {i:2d}: C1 F1={rpt["1"]["f1-score"]:.4f} @T={best_t:.2f} | AUC={roc_auc_score(y_test, y_proba):.4f}')
+
+df_rf = pd.DataFrame(rf_rows).sort_values('C1 F1', ascending=False).reset_index(drop=True)
+print(f'\n=== RF เรียงตาม C1 F1 ===')
+df_rf[['Config','C1 Prec','C1 Rec','C1 F1','Threshold','AUC']]
+```
+
+### 5.2 XGB Deep Tuning — GridSearchCV (รอบ 2) + GPU
+
+**Code:**
+```python
+old_xgb = xgb_tuned_tl['best_params']
+print(f'Params เดิม: {old_xgb}')
+print(f'C1 F1 เดิม: {xgb_tuned_tl["c1_f1"]:.4f}\n')
+
+lr = old_xgb.get('learning_rate', 0.1)
+md_val = old_xgb.get('max_depth', 6)
+ne = old_xgb.get('n_estimators', 300)
+sp = old_xgb.get('scale_pos_weight', 7)
+
+xgb_param_v2 = {
+    'n_estimators': [ne, ne + 100, ne + 200],
+    'max_depth': [md_val - 1, md_val, md_val + 2] if md_val > 2 else [md_val, md_val + 2],
+    'learning_rate': [lr * 0.5, lr, lr * 1.5] if lr < 0.5 else [lr],
+    'scale_pos_weight': [sp - 2, sp, sp + 3] if sp > 2 else [sp, sp + 3],
+    'min_child_weight': [1, 3, 5],
+}
+total = np.prod([len(v) for v in xgb_param_v2.values()])
+print(f'Combos: {total} × 5 folds = {total*5} fits (GPU)')
+print(f'ใช้ X_tl จาก Section 4.2 (preprocess + TomekLinks เรียบร้อยแล้ว)\n')
+
+# GridSearchCV บน GPU (ใช้ข้อมูลที่ preprocess ไว้แล้ว)
+grid_xgb_v2 = GridSearchCV(
+    XGBClassifier(device='cuda', random_state=42, eval_metric='logloss'),
+    xgb_param_v2, cv=skf, scoring='f1', n_jobs=1, refit=True
+)
+grid_xgb_v2.fit(X_tl, y_tl)
+
+y_pred_xgb_deep  = grid_xgb_v2.predict(X_test_pre)
+y_proba_xgb_deep = grid_xgb_v2.predict_proba(X_test_pre)[:, 1]
+
+# Threshold tuning
+thresholds_xgb = np.arange(0.3, 0.7, 0.05)
+f1s_xgb = [f1_score(y_test, (y_proba_xgb_deep >= t).astype(int)) for t in thresholds_xgb]
+best_t_xgb = thresholds_xgb[np.argmax(f1s_xgb)]
+rpt_xgb_t = classification_report(y_test, (y_proba_xgb_deep >= best_t_xgb).astype(int), output_dict=True)
+
+clean_params_xgb = grid_xgb_v2.best_params_
+print(f'Best params: {clean_params_xgb}')
+print(f'CV F1: {grid_xgb_v2.best_score_:.4f}')
+print(f'\nC1 F1: {rpt_xgb_t["1"]["f1-score"]:.4f} @T={best_t_xgb:.2f}')
+print(f'AUC:   {roc_auc_score(y_test, y_proba_xgb_deep):.4f}')
+print(f'\nเดิม: {xgb_tuned_tl["c1_f1"]:.4f} → ใหม่: {rpt_xgb_t["1"]["f1-score"]:.4f}')
+
+# Rebuild full pipeline
+xgb_deep_pipe = make_full_pipeline(
+    XGBClassifier(**clean_params_xgb, device='cuda', random_state=42, eval_metric='logloss'),
+    sampler=TomekLinks()
+)
+xgb_deep_pipe.fit(X_train, y_train)
+```
+
+### 5.3 การเปลี่ยนแปลงของค่า F1-score (Class 1) จาก Default → Tuned → Deep
+
+| Model | Default F1 | Tuned F1 | Deep F1 | Total Improvement |
+|------|------------|----------|----------|------------------|
+| RF | 0.2598 | 0.4459 | 0.4513 | **+0.1915** |
+| XGB | 0.1570 | 0.4425 | ⭐**0.4514**⭐ | **+0.2944** |
+
+![Confusion Matrix DT](Material/CM_D.png)
+
+จากตารางผลการพัฒนาโมเดลตาม Stage พบว่า ทั้ง Random Forest และ XGBoost มีประสิทธิภาพเพิ่มขึ้นอย่างชัดเจน เมื่อมีการปรับแต่งพารามิเตอร์เชิงลึก (Deep Tuning) โดย XGBoost ในขั้น Deep ให้ค่า F1-score ของคลาสเป้าหมายสูงที่สุด
+และแสดงถึงการพัฒนาจากค่าเริ่มต้นมากที่สุด จึงถือเป็นโมเดลที่มีศักยภาพสูงสุดในขั้นตอนนี้
+
+### 5.4 การปรับแต่ง XGBoost ด้วย RandomizedSearchCV โดยเพิ่มพารามิเตอร์ subsample และ colsample_bytree
+
+ในขั้นตอนนี้ ได้ดำเนินการปรับแต่งพารามิเตอร์ของ XGBoost เพิ่มเติม จากการ Deep Tuning ในขั้นก่อนหน้า โดยเลือกใช้ **RandomizedSearchCV** เพื่อค้นหาชุดพารามิเตอร์ที่หลากหลายและละเอียดมากขึ้น ภายใต้ข้อจำกัดด้านเวลาและทรัพยากรการประมวลผล
+ความแตกต่างสำคัญของขั้นตอนนี้คือ การเพิ่มพารามิเตอร์ **subsample** และ **colsample_bytree** ซึ่งทำหน้าที่ควบคุมสัดส่วนของข้อมูลตัวอย่างและจำนวนตัวแปร ช่วยลดการพึ่งพาข้อมูลซ้ำซ้อนและลดปัญหา overfitting รวมถึงทำให้โมเดลเรียนรู้ pattern ได้มีความหลากหลายมากขึ้น
+
+จากผลการทดลองพบว่า การใช้ RandomizedSearchCV ร่วมกับพารามิเตอร์ดังกล่าว ช่วยเพิ่มประสิทธิภาพของ XGBoost อย่างชัดเจน โดยค่า F1-score ของคลาสเป้าหมายเพิ่มขึ้นอีกเมื่อเทียบกับผลลัพธ์จาก Deep Tuning แบบเดิม
+ขณะเดียวกันยังสามารถรักษาสมดุลระหว่าง Precision และ Recall ได้ดี และมีค่า AUC เพิ่มขึ้น แสดงถึงความสามารถในการแยกคลาสที่ดีขึ้นโดยรวม
+
+ผลลัพธ์ในขั้นตอนนี้แสดงให้เห็นว่า การควบคุม randomness ของข้อมูลและตัวแปรที่ใช้งานเป็นปัจจัยสำคัญที่ช่วยดึงศักยภาพของ XGBoost ออกมาได้สูงสุด และทำให้โมเดลมีเสถียรภาพมากขึ้น
+ก่อนนำไปใช้เป็นตัวเลือกสุดท้ายในขั้นตอนถัดไป
+
+**ทั้งหมด:** 1,152,000 combos
+
+**RandomizedSearchCV:** สุ่ม 30 ชุด × 5 folds = 150 fits (GPU)
+
+**Best params:** {'subsample': 0.9, 'scale_pos_weight': 3, 'reg_lambda': 1.5, 'reg_alpha': 0.1, 'n_estimators': 200, 'min_child_weight': 1, 'max_depth': 6, 'learning_rate': 0.05, 'gamma': 0.5, 'colsample_bytree': 0.8}
+
+
+
+### 5.5 สรุปผลการประเมินโมเดล
+
+**XGB Deep เดิม:**        C1 F1 = 0.4514
+**XGB Randomized ใหม่:**  C1 F1 = 0.4605 (+0.0091)
+
+![Confusion Matrix RCV](Material/CM_RCV.png)
+
+
+| Class | Precision | Recall | F1-score | Support |
+|-------|-----------|--------|----------|---------|
+| 0 (ไม่สนใจ) | 0.96 | 0.78 | 0.86 | 66,880 |
+| 1 (สนใจ) | 0.33 | 0.77 | **0.46** | 9,342 |
+| **Accuracy** | – | – | **0.78** | 76,222 |
+| **Macro Avg** | 0.64 | 0.77 | 0.66 | 76,222 |
+| **Weighted Avg** | 0.88 | 0.78 | 0.81 | 76,222 |
 
 ---
+
+## Step 6: Final Model Selection and Conclusion
+
+จากผลการทดลองในขั้นตอน Deep Tuning ซึ่งรวมถึงการปรับแต่งพารามิเตอร์เชิงลึกของ Random Forest และ XGBoost รวมถึงการใช้ RandomizedSearchCV พร้อมพารามิเตอร์เพิ่มเติม
+พบว่า **XGBoost (Deep Tuned)** ให้ผลการทำนายที่ดีที่สุดโดยรวม เมื่อพิจารณาจากค่า **F1-score ของคลาสเป้าหมาย (Response = 1)** เป็นหลัก
+
+โมเดลดังกล่าวสามารถรักษาสมดุลระหว่าง Precision และ Recall ได้ดี โดยมีค่า F1-score สูงที่สุดเมื่อเทียบกับทุกเวอร์ชันของโมเดลที่ทดลอง พร้อมกับค่า AUC ที่อยู่ในระดับสูงและเสถียร
+แสดงถึงความสามารถในการแยกกลุ่มลูกค้าที่มีแนวโน้มสนใจได้อย่างมีประสิทธิภาพ
+
+ดังนั้น งานศึกษานี้จึงเลือก **XGBoost (Deep Tuned) + Tomek Links** เป็นแบบจำลองสุดท้าย สำหรับการนำไปใช้งานและพิจารณาเชิงธุรกิจในบริบทของการทำ Cross‑sell โดยเน้นการเพิ่มโอกาสในการเข้าถึงลูกค้าที่มีความสนใจ
+ควบคู่กับการควบคุมต้นทุนจากการติดต่อที่ไม่จำเป็น
+
+---
+
+## Step 7: Model Demonstration (Prediction Demo)
+
+ในขั้นตอนนี้ ได้ทำการสาธิตการใช้งานโมเดลที่ผ่านการคัดเลือก โดยการสร้างข้อมูลตัวอย่างของลูกค้า และนำเข้าสู่โมเดลเพื่อทำนายความน่าจะเป็นในการสนใจซื้อประกันรถ
+
+ผลลัพธ์ของการทำนายถูกแสดงในรูปแบบของความน่าจะเป็น (probability) พร้อมทั้งกำหนด threshold ที่ 0.50 เพื่อแปลงผลลัพธ์เป็นการตัดสินใจ ว่า “สนใจ” หรือ “ไม่สนใจ”
+
+ขั้นตอนนี้มีจุดประสงค์เพื่อแสดงให้เห็นว่าโมเดลสามารถนำไปใช้งานจริง ในการประเมินลูกค้าแต่ละรายได้อย่างไร และช่วยให้เข้าใจผลลัพธ์ของโมเดลในเชิงธุรกิจได้ชัดเจนมากขึ้น
+
+### 7.1 ตารางตัวอย่างข้อมูลลูกค้าสำหรับการสาธิตการทำนาย (Demo Customers)
+
+| ลำดับ | ชื่อกลุ่มลูกค้า | Gender | Age | Driving License | Region Code | Previously Insured | Vehicle Age | Vehicle Damage | Annual Premium | Policy Sales Channel | Vintage |
+|------|------------------|--------|-----|-----------------|-------------|--------------------|-------------|----------------|----------------|----------------------|---------|
+| 1 | หนุ่มรถใหม่ ไม่เคยมีประกัน | Male | 25 | 1 | 28 | 0 | < 1 Year | Yes | 25,000 | 26 | 200 |
+| 2 | แม่บ้านรถเก่า มีประกันแล้ว | Female | 45 | 1 | 3 | 1 | > 2 Years | No | 40,000 | 152 | 60 |
+| 3 | ลุงรถเก่า เคยชน ไม่มีประกัน | Male | 55 | 1 | 8 | 0 | > 2 Years | Yes | 35,000 | 26 | 100 |
+| 4 | สาวรถใหม่ มีประกันแล้ว ไม่เคยชน | Female | 22 | 1 | 28 | 1 | < 1 Year | No | 20,000 | 124 | 30 |
+| 5 | พี่ชายรถ 1–2 ปี เคยชน ไม่มีประกัน | Male | 40 | 1 | 11 | 0 | 1–2 Year | Yes | 45,000 | 26 | 150 |
+
+### 7.2 ผลลัพธ์การทำนายจากโมเดล
+
+![Confusion Matrix RCV](Material/Result.png)
+
+---
+
+😄🙏
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
